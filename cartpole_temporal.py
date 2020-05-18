@@ -14,7 +14,7 @@ import gym
 from utils import (
     run_envs, ExperienceDataset, prepare_tensor_batch,
     multinomial_likelihood, EnvironmentFactory, RLEnvironment,
-    DataLoader
+    DataLoader, LossPlot
     )
 
 
@@ -244,7 +244,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
 
     # Clear the csv file
     with open(csv_file, 'w') as f:
-        f.write('avg_reward, value_loss, policy_loss')
+        f.write('avg_reward, value_loss, policy_loss\n')
 
     # Move networks to the correct device
     policy = policy.to(device)
@@ -381,6 +381,16 @@ def main():
         gamma=1.0, policy_epochs=5, batch_size=250,
         device='cpu', valueloss=RegressionLoss())
 
+    draw_losses()
+
+def draw_losses():
+    fname = 'latest_run.csv'
+    import os
+    folder = os.getcwd()
+    graph = LossPlot(folder, fname)
+    graph.gen_plots()
+
 
 if __name__ == '__main__':
     main()
+    # draw_losses()
