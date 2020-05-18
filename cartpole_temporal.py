@@ -79,7 +79,7 @@ class CartPolePolicyNetwork(nn.Module):
             actions[i, 0] = action_idx
         return probs, actions
 
-
+## Original Value network for Cartpole Problem
 class CartPoleValueNetwork(nn.Module):
     """Approximates the value of a particular CartPole state."""
 
@@ -100,6 +100,128 @@ class CartPoleValueNetwork(nn.Module):
         Returns the value of each state, in shape [batch, 1]
         """
         return self._net(x)
+
+
+class RegressionLoss(nn.Module):
+    def __init__(self):
+        super(RegressionLoss, self).__init__()
+        self.error = torch.nn.MSELoss()
+
+    def forward(self, out, reward):
+        out = torch.sum(out)
+        out = out.view(1)
+        return self.error(out, reward)
+
+
+class Regression(torch.nn.Module):
+    def __init__(self, inputSize, outputSize):
+        super(Regression, self).__init__()
+        self.linear = torch.nn.Linear(inputSize, outputSize)
+
+    def forward(self, x):
+        out = self.linear(x)
+        return out
+
+
+class Attention(nn.Module):
+    def __init__(self, feature_dim, step_dim, bias=True, **kwargs):
+        super(Attention, self).__init__(**kwargs)
+
+        self.supports_masking = True
+
+        self.bias = bias
+        self.feature_dim = feature_dim
+        self.step_dim = step_dim
+        self.features_dim = 0
+
+        weight = torch.zeros(feature_dim, 1)
+        nn.init.kaiming_uniform_(weight)
+        self.weight = nn.Parameter(weight)
+
+        if bias:
+            self.b = nn.Parameter(torch.zeros(step_dim))
+
+    def forward(self, x, mask=None):
+        feature_dim = self.feature_dim
+        step_dim = self.step_dim
+
+        eij = torch.mm(
+            x.contiguous().view(-1, feature_dim),
+            self.weight
+        ).view(-1, step_dim)
+
+        if self.bias:
+            eij = eij + self.b
+
+        eij = torch.tanh(eij)
+        a = torch.exp(eij)
+
+        if mask is not None:
+            a = a * mask
+
+        a = a / (torch.sum(a, 1, keepdim=True) + 1e-10)
+
+        weighted_input = x * torch.unsqueeze(a, -1)
+        return torch.sum(weighted_input, 1)
+
+
+class TransformerModel(nn.Module):
+
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super(TransformerModel, self).__init__()
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        self.model_type = 'Transformer'
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.encoder = nn.Embedding(ntoken, ninp)
+        self.ninp = ninp
+        self.init_weights()
+
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self):
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src):
+        src = src.view((1, *src.shape))
+        output = self.transformer_encoder(src)
+        return output
+
+
+### Temporal reward prediction value network
+### Implemented from paper Temporal Credit assignment
+class ValueNetwork(nn.Module):
+    """Approximates the value of a particular state."""
+
+    def __init__(
+            self, transformer, selfatten, regression):
+        super(ValueNetwork, self).__init__()
+        self.transformer = transformer
+        self.regression = regression
+        self.selfatten = selfatten
+
+    def forward(self, x):
+        """Receives an observation of shape [batch, state_dim].
+        Returns the value of each state, in shape [batch, 1]
+        """
+        # return self._net(x)
+        x = x.squeeze()
+        hidden = self.transformer(x).squeeze()
+        # print(hidden.shape)
+        hidden = hidden.transpose(1, 0)
+        z = torch.sigmoid(self.selfatten(hidden))
+        # hidden = self.selfatten(hidden)
+        # print(hidden.shape, z.shape)
+        hidden_sum = hidden * z
+        hidden_sum = torch.reshape(
+            hidden_sum, (hidden_sum.shape[1], hidden_sum.shape[0]))
+        # print(hidden_sum.shape)
+        out = self.regression(hidden_sum)
+        return out
 
 
 def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=1000,
