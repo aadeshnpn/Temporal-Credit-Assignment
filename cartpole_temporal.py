@@ -376,12 +376,13 @@ def main():
     # lregression = lregression.to(device)
     value = ValueNetwork(transformer, selfatt, lregression)
 
-    ppo(factory, policy, value, multinomial_likelihood, epochs=500,
+    ppo(factory, policy, value, multinomial_likelihood, epochs=200,
         rollouts_per_epoch=100, max_episode_length=200,
         gamma=1.0, policy_epochs=5, batch_size=250,
         device='cpu', valueloss=RegressionLoss())
 
     draw_losses()
+
 
 def draw_losses():
     fname = 'latest_run.csv'
