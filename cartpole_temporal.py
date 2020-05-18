@@ -6,15 +6,15 @@ from threading import Thread
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import numpy as np
 from queue import Queue
 import gym
 
 from utils import (
-    run_envs, make_gif, ExperienceDataset, prepare_tensor_batch,
-    multinomial_likelihood
+    run_envs, ExperienceDataset, prepare_tensor_batch,
+    multinomial_likelihood, EnvironmentFactory, RLEnvironment,
+    DataLoader
     )
 
 
@@ -162,8 +162,8 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         loop.set_description('avg reward: % 6.2f' % (avg_r))
 
         # Make gifs
-        if gif_epochs and e % gif_epochs == 0:
-            make_gif(rollouts[0], gif_name + '%d.gif' % e)
+        # if gif_epochs and e % gif_epochs == 0:
+        #     make_gif(rollouts[0], gif_name + '%d.gif' % e)
 
         # Update the policy
         experience_dataset = ExperienceDataset(rollouts)
@@ -231,7 +231,7 @@ def main():
     value = CartPoleValueNetwork()
     ppo(factory, policy, value, multinomial_likelihood, epochs=1000,
         rollouts_per_epoch=100, max_episode_length=200,
-        gamma=0.99, policy_epochs=5, batch_size=256)
+        gamma=0.99, policy_epochs=5, batch_size=256, device='cuda:0')
 
 
 if __name__ == '__main__':

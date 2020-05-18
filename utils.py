@@ -3,6 +3,7 @@ import torch
 import math
 import imageio
 import numpy as np
+from torch.utils.data import Dataset, DataLoader
 
 
 class RLEnvironment(object):
@@ -67,8 +68,8 @@ def calculate_returns(trajectory, gamma):
         current_return = ret
 
 
-def run_envs(env, embedding_net, policy, experience_queue, reward_queue, num_rollouts, max_episode_length,
-              gamma, device):
+def run_envs(env, embedding_net, policy, experience_queue, reward_queue,
+                num_rollouts, max_episode_length, gamma, device):
     for _ in range(num_rollouts):
         current_rollout = []
         s = env.reset()
@@ -103,8 +104,9 @@ def prepare_tensor_batch(tensor, device):
     return tensor.detach().float().to(device)
 
 
-def make_gif(rollout, filename):
-    with imageio.get_writer(filename, mode='I', duration=1 / 30) as writer:
-        for x in rollout:
-            writer.append_data((x[0][:, :, 0] * 255).astype(np.uint8)
+# def make_gif(rollout, filename):
+#     with imageio.get_writer(filename, mode='I', duration=1 / 30) as writer:
+#         for x in rollout:
+#             writer.append_data((x[0][:, :, 0] * 255).astype(np.uint8)
+
 
