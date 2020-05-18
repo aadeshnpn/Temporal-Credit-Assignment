@@ -30,16 +30,23 @@ class CartPoleEnvironment(RLEnvironment):
     def __init__(self):
         super(CartPoleEnvironment, self).__init__()
         self._env = gym.make('CartPole-v0')
+        self.ereward = 0
 
     def step(self, action):
         """action is type np.ndarray of shape [1] and type np.uint8.
         Returns observation (np.ndarray), r (float), t (boolean)
         """
         s, r, t, _ = self._env.step(action.item())
-        return s, r, t
+        # print(s, r)
+        self.ereward += r
+        if t:
+            return s, self.ereward, t
+        else:
+            return s, 0.0, t
 
     def reset(self):
         """Returns observation (np.ndarray)"""
+        self.ereward = 0
         return self._env.reset()
 
 
@@ -79,6 +86,7 @@ class CartPolePolicyNetwork(nn.Module):
             actions[i, 0] = action_idx
         return probs, actions
 
+
 ## Original Value network for Cartpole Problem
 class CartPoleValueNetwork(nn.Module):
     """Approximates the value of a particular CartPole state."""
@@ -108,8 +116,12 @@ class RegressionLoss(nn.Module):
         self.error = torch.nn.MSELoss()
 
     def forward(self, out, reward):
-        out = torch.sum(out)
-        out = out.view(1)
+        # out = torch.sum(out)
+        # out = out.view(1)
+        # reward = reward.view(1)
+        # reward = reward.double()    # .to('cuda:0')
+        # out = out.double()  # .to('cuda:0')
+        # print('loss', out.shape, reward.shape)
         return self.error(out, reward)
 
 
@@ -211,7 +223,7 @@ class ValueNetwork(nn.Module):
         # return self._net(x)
         x = x.squeeze()
         hidden = self.transformer(x).squeeze()
-        # print(hidden.shape)
+        # print('hidden shape',hidden.shape)
         hidden = hidden.transpose(1, 0)
         z = torch.sigmoid(self.selfatten(hidden))
         # hidden = self.selfatten(hidden)
@@ -228,7 +240,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         rollouts_per_epoch=100, max_episode_length=200, gamma=0.99, policy_epochs=5,
         batch_size=256, epsilon=0.2, environment_threads=1, data_loader_threads=1,
         device=torch.device('cpu'), lr=1e-3, betas=(0.9, 0.999), weight_decay=0.01,
-        gif_name='', gif_epochs=0, csv_file='latest_run.csv'):
+        gif_name='', gif_epochs=0, csv_file='latest_run.csv', valueloss= nn.MSELoss()):
 
     # Clear the csv file
     with open(csv_file, 'w') as f:
@@ -245,8 +257,9 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         params = chain(params, embedding_net.parameters())
 
     # Set up optimization
-    optimizer = optim.Adam(params, lr=lr, betas=betas, weight_decay=weight_decay)
-    value_criteria = nn.MSELoss()
+    # optimizer = optim.Adam(params, lr=lr, betas=betas, weight_decay=weight_decay)
+    optimizer = optim.Adam(params, lr=lr)
+    value_criteria = valueloss
 
     # Calculate the upper and lower bound for PPO
     ppo_lower_bound = 1 - epsilon
@@ -297,14 +310,15 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         for _ in range(policy_epochs):
             avg_policy_loss = 0
             avg_val_loss = 0
-            for state, old_action_dist, old_action, reward, ret in data_loader:
+            for state, old_action_dist, old_action, reward, ret, s1 in data_loader:
                 state = prepare_tensor_batch(state, device)
                 old_action_dist = prepare_tensor_batch(old_action_dist, device)
                 old_action = prepare_tensor_batch(old_action, device)
                 ret = prepare_tensor_batch(ret, device).unsqueeze(1)
-
+                s1 = prepare_tensor_batch(s1, device)
                 optimizer.zero_grad()
-
+                if state.shape[0] != 250:
+                    continue
                 # If there is an embedding net, carry out the embedding
                 if embedding_net:
                     state = embedding_net(state)
@@ -317,8 +331,11 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
                 ratio = (current_likelihood / old_likelihood)
 
                 # Calculate the value loss
-                expected_returns = value(state)
+                # print(s1.shape)
+                expected_returns = value(s1)
+                # print(expected_returns.shape, ret.shape)
                 val_loss = value_criteria(expected_returns, ret)
+                # val_loss = value_criteria(expected_returns, reward.sum().detach())
 
                 # Calculate the policy loss
                 advantage = ret - expected_returns.detach()
@@ -350,10 +367,19 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
 def main():
     factory = CartPoleEnvironmentFactory()
     policy = CartPolePolicyNetwork()
-    value = CartPoleValueNetwork()
-    ppo(factory, policy, value, multinomial_likelihood, epochs=1000,
+    # value = CartPoleValueNetwork()
+    transformer = TransformerModel(500, 5, 1, 200, 2)
+    # transformer = transformer.to(device)
+    selfatt = Attention(250, 5)
+    # selfatt = selfatt.to(device)
+    lregression = Regression(5, 1)
+    # lregression = lregression.to(device)
+    value = ValueNetwork(transformer, selfatt, lregression)
+
+    ppo(factory, policy, value, multinomial_likelihood, epochs=500,
         rollouts_per_epoch=100, max_episode_length=200,
-        gamma=0.99, policy_epochs=5, batch_size=256, device='cuda:0')
+        gamma=1.0, policy_epochs=5, batch_size=250,
+        device='cpu', valueloss=RegressionLoss())
 
 
 if __name__ == '__main__':

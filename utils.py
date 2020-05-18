@@ -4,6 +4,7 @@ import math
 import imageio
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
 
 
 class RLEnvironment(object):
@@ -59,13 +60,23 @@ def get_log_p(data, mu, sigma):
     return -torch.log(torch.sqrt(2 * math.pi * sigma ** 2)) - (data - mu) ** 2 / (2 * sigma ** 2)
 
 
-def calculate_returns(trajectory, gamma):
-    current_return = 0
+# def calculate_returns(trajectory, gamma):
+#     current_return = 0
+#     for i in reversed(range(len(trajectory))):
+#         state, action_dist, action, reward = trajectory[i]
+#         ret = reward + gamma * current_return
+#         trajectory[i] = (state, action_dist, action, reward, ret)
+#         current_return = ret
+
+
+def calculate_returns(trajectory, gamma, finalrwd):
+    ret = finalrwd
     for i in reversed(range(len(trajectory))):
-        state, action_dist, action, reward = trajectory[i]
-        ret = reward + gamma * current_return
-        trajectory[i] = (state, action_dist, action, reward, ret)
-        current_return = ret
+        state, action_dist, action, rwd, s1 = trajectory[i]
+        # print(i, state, action, rwd, s1)
+        trajectory[i] = (state, action_dist, action, rwd, ret, s1)
+        # print(i, ret, end=' ')
+        ret = ret * gamma
 
 
 def run_envs(env, embedding_net, policy, experience_queue, reward_queue,
@@ -82,16 +93,18 @@ def run_envs(env, embedding_net, policy, experience_queue, reward_queue,
             action_dist, action = policy(input_state)
             action_dist, action = action_dist[0], action[0]  # Remove the batch dimension
             s_prime, r, t = env.step(action)
-
+            # print(_, s_prime, r)
             if type(r) != float:
                 print('run envs:', r, type(r))
-
-            current_rollout.append((s, action_dist.cpu().detach().numpy(), action, r))
+            s1 = np.concatenate((s, action*1.0))
+            current_rollout.append((s, action_dist.cpu().detach().numpy(), action, r, s1))
             episode_reward += r
             if t:
                 break
             s = s_prime
-        calculate_returns(current_rollout, gamma)
+        # print(current_rollout, gamma, episode_reward)
+        calculate_returns(current_rollout, gamma, episode_reward)
+        # print(current_rollout)
         experience_queue.put(current_rollout)
         reward_queue.put(episode_reward)
 
