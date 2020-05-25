@@ -10,6 +10,10 @@ from tqdm import tqdm
 import numpy as np
 from queue import Queue
 import gym
+import pickle
+import matplotlib.pyplot as plt
+import pandas as pd
+
 
 from utils import (
     run_envs, ExperienceDataset, prepare_tensor_batch,
@@ -238,7 +242,7 @@ class ValueNetwork(nn.Module):
 
 def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=1000,
         rollouts_per_epoch=100, max_episode_length=200, gamma=0.99, policy_epochs=5,
-        batch_size=256, epsilon=0.2, environment_threads=1, data_loader_threads=1,
+        batch_size=256, epsilon=0.2, environment_threads=4, data_loader_threads=4,
         device=torch.device('cpu'), lr=1e-3, betas=(0.9, 0.999), weight_decay=0.01,
         gif_name='', gif_epochs=0, csv_file='latest_run.csv', valueloss= nn.MSELoss()):
 
@@ -275,6 +279,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
 
     for e in range(epochs):
         # Run the environments
+        policy = policy.to('cpu')
         experience_queue = Queue()
         reward_queue = Queue()
         threads = [Thread(target=run_envs, args=(environments[i],
@@ -285,7 +290,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
                                                   rollout_nums[i],
                                                   max_episode_length,
                                                   gamma,
-                                                  device)) for i in range(environment_threads)]
+                                                  'cpu')) for i in range(environment_threads)]
         for x in threads:
             x.start()
         for x in threads:
@@ -295,7 +300,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         rollouts = list(experience_queue.queue)
         avg_r = sum(reward_queue.queue) / reward_queue.qsize()
         loop.set_description('avg reward: % 6.2f' % (avg_r))
-
+        policy = policy.to(device)
         # Make gifs
         # if gif_epochs and e % gif_epochs == 0:
         #     make_gif(rollouts[0], gif_name + '%d.gif' % e)
@@ -317,7 +322,7 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
                 ret = prepare_tensor_batch(ret, device).unsqueeze(1)
                 s1 = prepare_tensor_batch(s1, device)
                 optimizer.zero_grad()
-                if state.shape[0] != 250:
+                if state.shape[0] != 64:
                     continue
                 # If there is an embedding net, carry out the embedding
                 if embedding_net:
@@ -364,24 +369,99 @@ def ppo(env_factory, policy, value, likelihood_fn, embedding_net=None, epochs=10
         loop.update(1)
 
 
-def main():
+def main(i):
     factory = CartPoleEnvironmentFactory()
     policy = CartPolePolicyNetwork()
     # value = CartPoleValueNetwork()
     transformer = TransformerModel(500, 5, 1, 200, 2)
     # transformer = transformer.to(device)
-    selfatt = Attention(250, 5)
+    selfatt = Attention(64, 5)
     # selfatt = selfatt.to(device)
     lregression = Regression(5, 1)
     # lregression = lregression.to(device)
     value = ValueNetwork(transformer, selfatt, lregression)
 
-    ppo(factory, policy, value, multinomial_likelihood, epochs=200,
-        rollouts_per_epoch=100, max_episode_length=200,
-        gamma=1.0, policy_epochs=5, batch_size=250,
-        device='cpu', valueloss=RegressionLoss())
+    ppo(factory, policy, value, multinomial_likelihood, epochs=30,
+        rollouts_per_epoch=128, max_episode_length=200,
+        gamma=1.0, policy_epochs=5, batch_size=64,
+        device='cpu', valueloss=RegressionLoss(), csv_file='latest_run'+str(i)+'.csv')
 
-    draw_losses()
+    # draw_losses()
+
+class RewardPlot:
+
+    def __init__(
+            self, directory, fname,
+            title="Temporal-Credit-Assignment Performance",
+            pname='temporal'):
+        self.__dict__.update(locals())
+        plt.style.use('fivethirtyeight')
+        self.datas = []
+        for i in range(20):
+            self.data = self.load_file(i)
+            # print(dir(self.data))
+            self.vloss = self.data['value_loss']
+            self.ploss = self.data['policy_loss']
+            self.avg_reward = self.data['avg_reward']
+            self.data = [self.vloss, self.ploss, self.avg_reward]
+            self.datas.append(self.data)
+        self.pname = '/' + pname
+
+    def gen_plots(self):
+        # fig = plt.figure(figsize=[12, 20])
+        fig = plt.figure()
+
+        # Save the data in pickel
+        with open('data.pkl','wb') as f:
+            pickle.dump(self.datas, f, -1)
+
+        color = ['orange', 'red', 'green']
+        dcolor = ['coral', 'orangered', 'lime']
+        label = ['Value Loss', 'Policy Loss', 'Average Reward']
+        ylabel = ['Value Loss', 'Policy Loss', 'Avg Reward']
+        plt.title(self.title)
+        self.datas = np.array(self.datas)
+        print(self.datas.shape)
+        for i in range(0, 3):
+            if i !=2:
+                continue
+            data = self.datas[:,i,:]
+            mean = np.mean(data, axis=0)
+            std = np.std(data, axis=0)
+            xvalues = range(1, len(mean) + 1)
+            field_max = mean + std
+            field_min = mean - std
+            # ax1 = fig.add_subplot(3, 1, i+1)
+            ax1 = fig.add_subplot(1, 1, 1)
+            # ax1.plot(
+            #     range(len(self.data[i])), self.data[i],
+            #     color=color[i], label=label[i],
+            #     linewidth=1.0)
+            # Plotting mean and standard deviation
+            ax1.plot(
+                xvalues, mean, color=color[i], label=label[i],
+                linewidth=1.0)
+            ax1.fill_between(
+                xvalues, field_max, field_min, color=dcolor[i], alpha=0.3)
+            ax1.legend()
+            ax1.set_xlabel('Epochs')
+            ax1.set_ylabel(ylabel[i])
+            # ax1.set_yticks(np.arange(min(self.data[i]), max(self.data[i])+1, 10.0))
+            # ax1.set_yticks(np.linspace(min(mean), max(mean)+1, 10))
+            # ax1.set_title('Value Loss in Temporal Credit Assignment')
+        plt.tight_layout()
+        fig.savefig(
+            '/tmp' + self.pname + '.pdf')  # pylint: disable = E1101
+        fig.savefig(
+            '/tmp' + self.pname + '.png')  # pylint: disable = E1101
+        plt.close(fig)
+
+    def load_file(self, i):
+        fname = self.fname + str(i) +'.csv'
+        data = pd.read_csv(
+            self.directory + '/' + fname, sep=','  # pylint: disable=E1101
+            , skipinitialspace=True)
+        return data
 
 
 def draw_losses():
@@ -392,6 +472,16 @@ def draw_losses():
     graph.gen_plots()
 
 
+def draw_variance_graph():
+    fname = 'latest_run'
+    import os
+    folder = os.getcwd()
+    graph = RewardPlot(folder, fname)
+    graph.gen_plots()
+
+
 if __name__ == '__main__':
-    main()
+    for i in range(30):
+       main(i)
     # draw_losses()
+    # draw_variance_graph()
